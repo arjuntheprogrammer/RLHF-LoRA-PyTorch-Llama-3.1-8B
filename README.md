@@ -161,3 +161,8 @@ Notes:
 - Control generation with `--max_new_tokens`, `--temperature`, `--top_p`, and `--top_k`.
 
 ---
+
+## YouTube Recording
+https://youtu.be/wHukqwz3c-U
+
+---
