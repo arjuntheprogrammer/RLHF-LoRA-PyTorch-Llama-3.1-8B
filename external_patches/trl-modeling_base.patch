@@ -1,0 +1,24 @@
+--- trl/models/modeling_base.py
++++ trl/models/modeling_base.py
+@@ -227,6 +227,10 @@
+                             pretrained_model,
+                             **peft_quantization_kwargs,
+                         )
++                        for module in pretrained_model.modules():
++                            state = getattr(module, "state", None)
++                            if state is not None and not hasattr(state, "memory_efficient_backward"):
++                                state.memory_efficient_backward = False
+                     pretrained_model = get_peft_model(pretrained_model, peft_config)
+                     logging.info("peft adapter initialised")
+ 
+@@ -240,6 +244,10 @@
+                         pretrained_model,
+                         **peft_quantization_kwargs,
+                     )
++                    for module in pretrained_model.modules():
++                        state = getattr(module, "state", None)
++                        if state is not None and not hasattr(state, "memory_efficient_backward"):
++                            state.memory_efficient_backward = False
+                 pretrained_model = get_peft_model(pretrained_model, peft_config)
+                 logging.info("peft adapter initialised")
+         else:
