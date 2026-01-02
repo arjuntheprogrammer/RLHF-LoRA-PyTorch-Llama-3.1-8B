@@ -163,6 +163,8 @@ Notes:
 ---
 
 ## YouTube Recording
-https://youtu.be/wHukqwz3c-U
+
+<https://youtu.be/wHukqwz3c-U>
+[![YouTube Recording](https://img.youtube.com/vi/wHukqwz3c-U/hqdefault.jpg)](https://youtu.be/wHukqwz3c-U)
 
 ---
