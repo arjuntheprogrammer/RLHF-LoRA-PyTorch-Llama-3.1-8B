@@ -7,6 +7,8 @@ Full pipeline to finetune Alpaca LLM with LoRA and RLHF on consumer hardware.
 - Runs PPO-based RLHF to align responses using the reward model.
 - Goal: produce an instruction-following assistant with improved response quality on consumer hardware.
 
+![Training Diagram](assets/diagram.png)
+
 ### Default Model & Datasets (Examples)
 - Base model: `meta-llama/Llama-3.1-8B` for SFT and reward modeling; PPO uses the merged SFT checkpoint plus the merged reward model.
 - Datasets:
