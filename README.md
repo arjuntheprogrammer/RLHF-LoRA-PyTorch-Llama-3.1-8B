@@ -1,6 +1,15 @@
 # Alpaca-LoRA-RLHF-PyTorch
 Full pipeline to finetune Alpaca LLM with LoRA and RLHF on consumer hardware.
 
+## Theory
+- Base model: The pretrained foundation model (e.g., Llama 3.1 8B) used as the starting point for all downstream steps.
+- SFT (Supervised Fine-Tuning): Trains LoRA adapters on instruction data so the model follows prompts and produces task-specific responses.
+- Reward model (RM): A separate model trained on preference pairs that learns to score responses for a given prompt.
+- Reward model output: A scalar score per response (higher is better) used as the optimization signal for RLHF.
+- PPO-based RLHF: Uses Proximal Policy Optimization to update the SFT model so its outputs receive higher reward scores while staying close to the original policy.
+- LoRA adapters: Lightweight, trainable layers injected into the base model to reduce VRAM use and enable fast fine-tuning.
+- Adapter merge: Combines LoRA weights into the base model to produce a standalone checkpoint for inference or the next stage.
+
 ## About
 - Trains a LLaMA-style causal language model with LoRA adapters on Alpaca-style instruction data.
 - Trains a reward model on pairwise preferences.
