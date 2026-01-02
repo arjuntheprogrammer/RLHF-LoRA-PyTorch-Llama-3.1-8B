@@ -1,21 +1,19 @@
 #!python
 # -*- coding: utf-8 -*-
 
-# coding=utf-8
-# Copyright 2022 The HuggingFace Inc. team. All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-"""Run PPO tuning against a reward model using TRL."""
+"""Run PPO tuning against a reward model using TRL.
+
+This script demonstrates how to fine-tune a causal language model with
+Proximal Policy Optimization (PPO) using the `trl` library. The workflow is:
+- Build or load a dataset of prompts
+- Generate model responses (rollouts) from the policy model
+- Score responses using an external reward model (pipeline)
+- Run PPO updates on the policy model (with optional LoRA adapters)
+- Periodically save model checkpoints
+
+Note: This script sets up a value head on the causal LM and uses a
+PPOTrainer to manage rollouts, batching, and optimization steps.
+"""
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -111,7 +109,12 @@ if tokenizer.pad_token is None:
 
 
 def build_dataset(tokenizer, dataset_name="lvwerra/stack-exchange-paired"):
-    """Tokenize and filter the dataset into PPO-ready inputs."""
+    """Tokenize and filter the dataset into PPO-ready inputs.
+
+    We convert each raw prompt into a text `query` and pre-tokenize it so the
+    PPO trainer can efficiently generate responses from the policy. We filter
+    out inputs that exceed the model's max context (512 tokens here).
+    """
     ds = load_dataset(dataset_name, split="train")
     original_columns = ds.column_names
     num_proc = 24
@@ -122,6 +125,7 @@ def build_dataset(tokenizer, dataset_name="lvwerra/stack-exchange-paired"):
             "input_ids": [],
         }
         for question in examples["user_input"]:
+            # Build a clear prompt that the policy will continue from.
             query = "Question: " + question + "\n\nAnswer: "
             tokenized_question = tokenizer(query, truncation=True)
             new_examples["query"].append(query)
@@ -135,6 +139,7 @@ def build_dataset(tokenizer, dataset_name="lvwerra/stack-exchange-paired"):
         num_proc=num_proc,
         remove_columns=original_columns,
     )
+    # Filter by sequence length so generation stays within supported context.
     ds = ds.filter(lambda x: len(x["input_ids"]) < 512, batched=False)
 
     ds.set_format(type="torch")
@@ -145,15 +150,23 @@ dataset = build_dataset(tokenizer, dataset_name=dataset_name)
 
 
 def collator(data):
-    """Convert a list of dicts into a batch of lists."""
+    """Convert a list of dicts into a batch of lists.
+
+    PPOTrainer expects batches where each entry is a list of items (not tensors).
+    This collator converts a list-of-dicts into a dict-of-lists for convenience.
+    """
     return dict((key, [d[key] for d in data]) for key in data[0])
 
 
 set_seed(config.seed)
 
+# `Accelerator().local_process_index` gives the process-local device id which
+# is useful when mapping the model to the correct device in distributed runs.
 current_device = Accelerator().local_process_index
 
-# Attach a new LoRA adapter for PPO updates.
+# Attach a new LoRA adapter for PPO updates. Using LoRA keeps the PPO
+# optimization focused on a small set of adapter parameters, which is useful
+# for faster and cheaper RL fine-tuning.
 lora_config = LoraConfig(
     r=8,
     lora_alpha=16,
@@ -219,7 +232,7 @@ output_length_sampler = LengthSampler(output_min_length, output_max_length)
 for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     question_tensors = batch["input_ids"]
 
-    # Generate a response and score it with the reward model.
+    # 1) Generate responses from the current policy (rollouts)
     response_tensors = ppo_trainer.generate(
         question_tensors,
         return_prompt=False,
@@ -228,14 +241,16 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     )
     batch["response"] = tokenizer.batch_decode(response_tensors, skip_special_tokens=True)
 
-    # Compute sentiment score
+    # 2) Score generated responses with the reward model pipeline
     texts = [q + r for q, r in zip(batch["query"], batch["response"])]
     pipe_outputs = sentiment_pipe(texts, **sent_kwargs)
+    # Convert pipeline outputs into reward tensors expected by PPO
     rewards = [torch.tensor(output[0]["score"] - script_args.reward_baseline) for output in pipe_outputs]
 
-    # Run PPO step
+    # 3) Make a PPO optimization step using the questions, responses and rewards
     stats = ppo_trainer.step(question_tensors, response_tensors, rewards)
     ppo_trainer.log_stats(stats, batch, rewards)
 
+    # 4) Periodically save model checkpoints
     if script_args.save_freq and (epoch + 1) % script_args.save_freq == 0:
         ppo_trainer.save_pretrained(script_args.output_dir + f"step_{epoch}")

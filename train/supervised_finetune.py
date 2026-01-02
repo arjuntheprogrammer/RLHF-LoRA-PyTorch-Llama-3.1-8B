@@ -1,6 +1,19 @@
 #!python
 # -*- coding: utf-8 -*-
-"""Supervised LoRA finetuning for Alpaca-style data."""
+"""Supervised LoRA finetuning for Alpaca-style data.
+
+This script runs supervised fine-tuning with LoRA adapters on instruction-following
+datasets (e.g., Alpaca). It supports loading models in 8-bit for memory
+efficiency, optional CPU offload, and using PEFT/LoRA to update only small
+adapter parameters instead of the full model.
+
+Key steps:
+- Load base causal LM and tokenizer
+- Optionally prepare model for k-bit (8-bit) fine-tuning
+- Attach LoRA adapters and (optionally) resume from adapter checkpoint
+- Build tokenized SFT dataset and run HF Trainer-based training
+- Save only adapter weights to keep checkpoints small
+"""
 
 import os
 import sys
@@ -86,6 +99,9 @@ def train(
     assert (
         base_model
     ), "Please specify a --base_model, e.g. --base_model='huggyllama/llama-7b'"
+    # Compute gradient accumulation so that `batch_size` corresponds to an
+    # effective global batch size even when using smaller micro-batches that
+    # fit on each device/GPU.
     gradient_accumulation_steps = batch_size // micro_batch_size
 
     # Configure device placement for single-GPU vs DDP.
@@ -143,14 +159,21 @@ def train(
     tokenizer.padding_side = "left"
 
     if use_8bit:
-        # Patch bitsandbytes state for PEFT LoRA injection.
+        # When using 8-bit weights (bitsandbytes) some modules expose a low-level
+        # `state` used by efficient kernels; ensure it has the expected flags so
+        # PEFT's LoRA injection works correctly.
         for module in model.modules():
             state = getattr(module, "state", None)
             if state is not None and not hasattr(state, "memory_efficient_backward"):
                 state.memory_efficient_backward = False
+        # Rewire the model for k-bit fine-tuning so adapter weights can be trained
+        # without modifying the base model's low-precision parameters directly.
         model = prepare_model_for_kbit_training(model)
 
     # Attach LoRA adapters to the base model.
+    # Configure LoRA adapters: low-rank updates injected into the model so we
+    # can fine-tune with far fewer trainable parameters. `target_modules` picks
+    # which layers to modify (e.g., query/key/value projections).
     config = LoraConfig(
         r=lora_r,
         lora_alpha=lora_alpha,
@@ -162,7 +185,8 @@ def train(
     model = get_peft_model(model, config)
 
     if resume_from_checkpoint:
-        # Resume from either full or adapter-only checkpoint.
+        # Resume from either a full model checkpoint or an adapter-only checkpoint.
+        # Adapter-only checkpoints are much smaller and contain only LoRA params.
         checkpoint_name = os.path.join(
             resume_from_checkpoint, "pytorch_model.bin"
         )
@@ -174,6 +198,7 @@ def train(
         if os.path.exists(checkpoint_name):
             print(f"Restarting from {checkpoint_name}")
             adapters_weights = torch.load(checkpoint_name)
+            # Load adapter weights into the PEFT-wrapped model.
             set_peft_model_state_dict(model, adapters_weights)
             print(f"model: ", type(model))
         else:
@@ -181,7 +206,10 @@ def train(
 
     model.print_trainable_parameters()
 
-    # Build tokenized train/eval datasets.
+    # Build tokenized train/eval datasets via the project's SFT data loader.
+    # The loader returns datasets compatible with HF Trainer (torch tensors or
+    # dataset objects). `train_on_inputs` controls whether the input prompt part
+    # is included in the loss computation.
     data_loader = sft_dataloader.SFTDataLoader(
         data_path,
         cutoff_len,
@@ -230,7 +258,8 @@ def train(
     model.config.use_cache = False
 
     old_state_dict = model.state_dict
-    # Save only adapter weights to keep checkpoints small.
+    # Override `state_dict` so that saving only writes LoRA adapter parameters.
+    # This keeps checkpoints small and focused on the trainable pieces.
     model.state_dict = (
         lambda self, *_, **__: get_peft_model_state_dict(
             self, old_state_dict()
