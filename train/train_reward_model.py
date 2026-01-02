@@ -8,6 +8,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
 
+# Ensure repo root is importable when running from train/.
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import evaluate
@@ -108,6 +109,7 @@ output_name = os.path.join(
     "output",
     f"reward_model_{model_name_split}_{script_args.train_subset}_{script_args.learning_rate}",
 )
+# TrainingArguments must be set before model init when using DeepSpeed.
 training_args = TrainingArguments(
     output_dir=output_name,
     learning_rate=script_args.learning_rate,
@@ -156,6 +158,7 @@ if "llama" in script_args.model_name:
             load_in_8bit=True,
             llm_int8_enable_fp32_cpu_offload=allow_cpu_offload,
         )
+        # Load LLaMA reward model with 8-bit quantization.
         model = LlamaForSequenceClassification.from_pretrained(
             script_args.model_name,
             num_labels=1,
@@ -171,6 +174,7 @@ if "llama" in script_args.model_name:
             device_map=device_map,
         )
 else:
+    # Fallback for non-LLaMA models.
     model = AutoModelForSequenceClassification.from_pretrained(
         script_args.model_name,
         num_labels=1,
@@ -185,6 +189,7 @@ for module in model.modules():
     if state is not None and not hasattr(state, "memory_efficient_backward"):
         state.memory_efficient_backward = False
 
+# Prepare for k-bit training and attach LoRA adapters.
 model = prepare_model_for_kbit_training(model)
 
 peft_config = LoraConfig(

@@ -11,8 +11,10 @@ Full pipeline to finetune Alpaca LLM with LoRA and RLHF on consumer hardware.
 
 ### Default Model & Datasets (Examples)
 - Base model: `meta-llama/Llama-3.1-8B` for SFT and reward modeling; PPO uses the merged SFT checkpoint plus the merged reward model.
+  - Link: <https://huggingface.co/meta-llama/Llama-3.1-8B>
 - Datasets:
   - SFT: `yahma/alpaca-cleaned` (instruction-following pairs).
+    - Link: <https://huggingface.co/datasets/yahma/alpaca-cleaned>
   - Reward modeling + PPO prompts: `./datasets/` (pairwise preference data with `user_input`, `completion_a`, `completion_b`).
 - Trained/tested on: RTX 4090 GPU.
 

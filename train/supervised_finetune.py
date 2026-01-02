@@ -6,6 +6,7 @@ import os
 import sys
 from typing import List
 
+# Ensure repo root is importable when running from train/.
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import fire
@@ -87,6 +88,7 @@ def train(
     ), "Please specify a --base_model, e.g. --base_model='huggyllama/llama-7b'"
     gradient_accumulation_steps = batch_size // micro_batch_size
 
+    # Configure device placement for single-GPU vs DDP.
     device_map = "auto"
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     ddp = world_size != 1
@@ -94,6 +96,7 @@ def train(
         device_map = {"": int(os.environ.get("LOCAL_RANK") or 0)}
         gradient_accumulation_steps = gradient_accumulation_steps // world_size
 
+    # Configure optional Weights & Biases logging.
     use_wandb = len(wandb_project) > 0 or (
         "WANDB_PROJECT" in os.environ and len(os.environ["WANDB_PROJECT"]) > 0
     )
@@ -104,6 +107,7 @@ def train(
     if len(wandb_log_model) > 0:
         os.environ["WANDB_LOG_MODEL"] = wandb_log_model
 
+    # Choose an 8-bit device map with optional CPU offload.
     num_gpus = torch.cuda.device_count()
     if use_8bit:
         if ddp:
@@ -117,6 +121,7 @@ def train(
     else:
         quant_device_map = device_map
 
+    # Load the base model with quantization if requested.
     model_kwargs = {"torch_dtype": torch.float16}
     if quant_device_map is not None:
         model_kwargs["device_map"] = quant_device_map
@@ -138,12 +143,14 @@ def train(
     tokenizer.padding_side = "left"
 
     if use_8bit:
+        # Patch bitsandbytes state for PEFT LoRA injection.
         for module in model.modules():
             state = getattr(module, "state", None)
             if state is not None and not hasattr(state, "memory_efficient_backward"):
                 state.memory_efficient_backward = False
         model = prepare_model_for_kbit_training(model)
 
+    # Attach LoRA adapters to the base model.
     config = LoraConfig(
         r=lora_r,
         lora_alpha=lora_alpha,
@@ -155,6 +162,7 @@ def train(
     model = get_peft_model(model, config)
 
     if resume_from_checkpoint:
+        # Resume from either full or adapter-only checkpoint.
         checkpoint_name = os.path.join(
             resume_from_checkpoint, "pytorch_model.bin"
         )
@@ -173,6 +181,7 @@ def train(
 
     model.print_trainable_parameters()
 
+    # Build tokenized train/eval datasets.
     data_loader = sft_dataloader.SFTDataLoader(
         data_path,
         cutoff_len,
@@ -188,6 +197,7 @@ def train(
         model.is_parallelizable = True
         model.model_parallel = True
 
+    # Train with the HF Trainer API.
     trainer = transformers.Trainer(
         model=model,
         train_dataset=train_data,

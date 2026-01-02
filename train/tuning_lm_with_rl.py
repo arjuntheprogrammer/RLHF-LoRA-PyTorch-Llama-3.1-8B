@@ -32,6 +32,7 @@ try:
 except ImportError:
     import random
 
+    # Minimal fallback for older TRL builds.
     class LengthSampler:
         def __init__(self, min_value, max_value):
             self.min_value = min_value
@@ -85,6 +86,7 @@ reward_model_name = script_args.reward_model_name
 dataset_name = "./datasets/"
 print("dataset_name: ", dataset_name)
 
+# PPO hyperparameters and logging config.
 config = PPOConfig(
     model_name=script_args.model_name,
     learning_rate=script_args.learning_rate,
@@ -143,6 +145,7 @@ dataset = build_dataset(tokenizer, dataset_name=dataset_name)
 
 
 def collator(data):
+    """Convert a list of dicts into a batch of lists."""
     return dict((key, [d[key] for d in data]) for key in data[0])
 
 
@@ -150,6 +153,7 @@ set_seed(config.seed)
 
 current_device = Accelerator().local_process_index
 
+# Attach a new LoRA adapter for PPO updates.
 lora_config = LoraConfig(
     r=8,
     lora_alpha=16,
@@ -215,6 +219,7 @@ output_length_sampler = LengthSampler(output_min_length, output_max_length)
 for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     question_tensors = batch["input_ids"]
 
+    # Generate a response and score it with the reward model.
     response_tensors = ppo_trainer.generate(
         question_tensors,
         return_prompt=False,
